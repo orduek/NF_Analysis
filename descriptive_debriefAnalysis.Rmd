@@ -1,0 +1,48 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: "Or Duek"
+---
+
+```{r}
+require(tidyverse)
+```
+
+```{r}
+df <- read.csv('Neurofeedback_DATA_LABELS_2021-07-02_0926.csv')
+table(df$Which.group.do.you.think.you.were.in.,df$On.a.scale.from.1..10..how.confident.are.you.in.this.answer.)
+
+```
+
+# Michelle suggest to score from negative 10 (sure I was shame) and positive 10 (sure I was real)
+
+```{r}
+# here we run through the database and create a new variable of level of confidence. 
+# If they were sham, the confidence will be minus (so -10 very confident I was sham). If they were real
+# it will be plus (so very confident I was in the real group will be 10)
+for (i in 1:nrow(df)) {
+ # print(i)
+  if (df$Which.group.do.you.think.you.were.in.[i]=="Real (Experimental)") {
+    df$newVar[i] <- df[i,8] 
+    
+  } else {
+    df$newVar[i] <- df[i,8] * -1
+  }
+}
+
+dfReal <- filter(df, Group.=='Real (Experimental)')
+table(dfReal$Which.group.do.you.think.you.were.in.,dfReal$On.a.scale.from.1..10..how.confident.are.you.in.this.answer.)
+
+dfSham <- filter(df, Group.=='Sham (Control)')
+table(dfSham$Which.group.do.you.think.you.were.in.,dfSham$On.a.scale.from.1..10..how.confident.are.you.in.this.answer.)
+```
+
+## Now let see
+```{r}
+hist(df$newVar)
+hist(dfReal$newVar)
+hist(dfSham$newVar)
+t.test(dfReal$newVar, dfSham$newVar)
+```
+
+

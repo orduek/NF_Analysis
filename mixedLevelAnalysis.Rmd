@@ -1,0 +1,111 @@
+---
+title: "Neurofeedback Amygdala activation analysis"
+author: "Or Duek"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: yes
+---
+
+# Loading and organizing data
+
+```{r, results='hide', message=FALSE}
+# loading libraries
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+library(emmeans)
+```
+
+
+```{r, warning=FALSE, results='hide'}
+# loading and organizing data
+df <- read.csv('roi_data_regulation_untrained.csv')
+dfReal <- select(df, Subject, Group, Pre.untrained, Post_untrained, FU_untrained)
+df_long <- pivot_longer(dfReal, cols = c('Pre.untrained', 'Post_untrained', 'FU_untrained'))
+# change names for easier interpretation
+colnames(df_long) <- c('subject','group','time','value')
+df_long$time <- factor(df_long$time, levels = c('Pre.untrained','Post_untrained','FU_untrained'))
+df_long$group <- factor(df_long$group, levels = c('Real','Sham'))
+```
+
+# Statistical models
+## Mixed level model with subjects nested within group
+```{r}
+# random intercept
+model1 <- lmer(value ~ time * group + (1|subject), data= df_long)
+summary(model1)
+anova(model1)
+BIC(model1)
+```
+
+```{r}
+
+library(ggplot2)
+ggplot(df_long, aes(x=group, y=value, color=time)) + geom_boxplot() + theme_minimal()# + geom_line()
+
+```
+
+## Using baseline as covariate
+
+```{r}
+## After talking with Tobias - leave baseline also in the time variable
+df_long_baseline <- pivot_longer(dfReal, cols = c('Pre.untrained','Post_untrained', 'FU_untrained'))
+df_long_baseline <- merge(df_long_baseline, dfReal[,c('Subject','Pre.untrained')]) # adding the baseline
+colnames(df_long_baseline) <- c('subject','group','time','value','baseline')
+
+df_long_baseline$time <- factor(df_long_baseline$time, levels = c('Pre.untrained','Post_untrained','FU_untrained'))
+df_long_baseline$group <- factor(df_long_baseline$group, levels = c('Real','Sham'))
+# remove NAs from the baseline
+#df_long_baseline <- df_long_baseline[!is.na(df_long_baseline$baseline), ]
+
+model4 <- lmer(value ~ time * group + baseline + (1|subject), data=df_long_baseline)
+summary(model4)
+anova(model4)
+```
+
+```{r}
+VarCorr(model4) # total sigma 0.3
+emm <- emmeans(model4,  ~group, by='time')
+
+emmip(model4, group ~ time, CIs = T) + theme_minimal()
+eff_size(emm, sigma = 0.3, edf = 2)
+```
+
+So, it seems we have an effect size of 0.34 after treatment but 1.088 at follow-up. 
+Lets plot the change from baseline of each group
+
+### Comparing time effect sized
+```{r}
+emm2 <- emmeans(model4,  ~time, by='group')
+eff_size(emm2, sigma = 0.3, edf = 2)
+```
+So here we have an effect of >0.7 for both after trt and follow-up in the real group. 
+
+## Graph of difference from baseline
+
+```{r, warning=FALSE, results='hide'}
+dfGraph <- df
+dfGraph$delta0 <- 0
+dfGraph$delta1 <- dfGraph$Post_untrained - dfGraph$Pre.untrained
+dfGraph$delta2 <- dfGraph$FU_untrained - dfGraph$Pre.untrained
+dfGraph_long <- pivot_longer(dfGraph, cols = c('delta0','delta1','delta2'), names_to = 'time')
+```
+ 
+
+
+```{r, warning=FALSE}
+ggplot(dfGraph_long, aes(x=time, y=value, color=Group, group=Group)) + geom_smooth(level = 0.68) + theme_minimal()
+```
+
+We have used standard error of the mean hear, to make it clearer.
+
+## Calculate partial eta square
+
+```{r}
+library(sjstats)
+am2 <- anova_stats(model4)
+am2
+```
+

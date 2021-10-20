@@ -1,0 +1,427 @@
+---
+title: "NF_Bayes"
+
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+# Setup
+
+```{r knitr-setup, results="hide", message=FALSE, echo=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  dev = "png",
+  dpi = 150,
+  fig.align = "center",
+  comment = NA
+)
+```
+
+```{r setup, results="hide", message=FALSE}
+library(cmdstanr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(bayesplot)
+library(posterior)
+
+theme_set(bayesplot::theme_default())
+```
+
+## Prepare data
+
+```{r}
+df <- read.csv('roi_data_regulation_untrained.csv')
+dfReal <- select(df, Subject, Group, Pre.untrained, Post_untrained, FU_untrained)
+df_clean <- na.omit(dfReal)
+df_long_clean <- pivot_longer(df_clean, cols = c('Pre.untrained', 'Post_untrained', 'FU_untrained'))
+colnames(df_long_clean) <- c('subject','group','time','value')
+df_long_clean$time <- factor(df_long_clean$time, levels = c('Pre.untrained','Post_untrained','FU_untrained'))
+df_long_clean$group <- factor(df_long_clean$group, levels = c('Real','Sham'))
+
+df_long_clean$subject <- factor(df_long_clean$subject)
+df_long_clean$sub <- as.numeric(df_long_clean$subject)
+
+```
+
+```{r}
+source("replace-rstan-syntax-check.R")
+```
+
+```{r comp_simple_pois}
+comp_simple_pois <- cmdstan_model("HLM_stan.stan")
+```
+
+```{r}
+standata_simple <- list(
+  N = nrow(df_long_clean),
+  nSub = length(unique(df_long_clean$subject)),
+  group = df_long_clean$group,
+  time = df_long_clean$time,
+  subject = df_long_clean$sub,
+  y = df_long_clean$value
+)
+str(standata_simple)
+```
+
+```{r}
+fit_simple_pois <- comp_simple_pois$sample(
+  data = standata_simple,
+  # these are the defaults but specifying them anyway
+  # so you can see how to use them:
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000
+)
+```
+
+```{r fit_simple_pois-summary}
+# The summary method calls posterior::summarize_draws()
+fit_simple_pois$summary(variables = c("alpha", "beta1", "beta2"))
+```
+
+We can also plot the posterior distributions:
+
+```{r fit_simple_pois-mcmc_hist}
+# https://mc-stan.org/bayesplot/reference/MCMC-distributions
+draws <- fit_simple_pois$draws(c("beta1", "beta2"), format = "matrix")
+mcmc_hist(draws) # marginal posteriors of alpha and beta
+mcmc_scatter(draws, alpha = 0.2, size = 1) # joint posterior of (alpha, beta)
+```
+
+And compare them to draws from the prior:
+
+```{r compare-prior-posterior}
+alpha_prior_post <- cbind(
+  alpha_prior = rnorm(4000, 0, 1),
+  alpha_posterior = as.vector(draws[, "beta1"])
+)
+mcmc_hist(
+  alpha_prior_post,
+  facet_args = list(nrow = 2),
+  binwidth = 0.1
+) + xlim(range(alpha_prior_post))
+
+
+beta_prior_post <- cbind(
+  beta_prior = rnorm(4000, 0, 1),
+  beta_posterior = as.vector(draws[, "beta2"])
+)
+mcmc_hist(
+  beta_prior_post,
+  facet_args = list(nrow = 2),
+  binwidth = 0.05
+) + xlim(range(beta_prior_post))
+```
+
+### Posterior predictive checking
+
+```{r fit_simple_pois-y_rep}
+y_rep <- fit_simple_pois$draws("y_rep", format = "matrix")
+dim(y_rep) # number of posterior draws x number of data points
+```
+
+```{r fit_simple_pois-ppc_dens_overlay}
+# https://mc-stan.org/bayesplot/reference/PPC-distributions#plot-descriptions
+ppc_dens_overlay(y = standata_simple$y, yrep = y_rep[1:500,])
+
+ppc_ecdf_overlay(y = standata_simple$y, yrep = y_rep[1:200,])
+```
+
+# Rethinking the model
+
+Ok, this model is not the best. Lets try another one
+Now we add interaction effect for the model
+
+```{r}
+comp_interaction <- cmdstan_model("HLM_stan_interaction.stan")
+```
+```{r}
+fit_interaction_model <- comp_interaction$sample(
+  data = standata_simple,
+  # these are the defaults but specifying them anyway
+  # so you can see how to use them:
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000
+)
+```
+
+```{r}
+# The summary method calls posterior::summarize_draws()
+fit_interaction_model$summary()#variables = c("beta1", "beta2","beta3"))
+```
+```{r fit_simple_pois-y_rep}
+y_rep <- fit_interaction_model$draws("y_rep", format = "matrix")
+dim(y_rep) # number of posterior draws x number of data points
+```
+
+```{r fit_simple_pois-ppc_dens_overlay}
+# https://mc-stan.org/bayesplot/reference/PPC-distributions#plot-descriptions
+ppc_dens_overlay(y = standata_simple$y, yrep = y_rep[1:50,])
+
+ppc_ecdf_overlay(y = standata_simple$y, yrep = y_rep[1:500,])
+```
+```{r}
+library(loo)
+interaction_log <- extract_log_lik(fit_interaction_model)
+simple_log <- extract_log_lik(fit_simple_pois$loo)
+
+fit_simple_pois$summary("lp__")
+fit_interaction_model$summary("lp__")
+```
+
+```{r}
+library(brms)
+model_br <- brm(value ~ time*group + (1|subject), data=df_long_clean)
+summary(model_br)
+plot(model_br)
+```
+```{r}
+model_br$model
+```
+
+## Model with matrix
+
+```{r}
+# create a matrix
+# for within subject effects
+W <- get_contrast_matrix(data= df_long_clean, formula = ~ time)
+W
+# create fixed effects matrix - to do so we need one row per person of group
+df_long_clean %>%
+  dplyr::group_by(
+    subject , group
+  ) %>% 
+  dplyr::summarise() %>%
+  get_contrast_matrix(
+    formula = ~ group
+  ) -> B
+```
+```{r}
+# 
+standata_mixed <- list(
+  nY = nrow(df_long_clean),
+  nSubj = length(unique(df_long_clean$subject)),
+  nW = ncol(W),
+  nB = ncol(B),
+  W = W,
+  B = B,
+  Y = df_long_clean$value,
+  subjIndices = get_subjInds(df_long_clean$subject)
+)
+str(standata_mixed)
+```
+
+```{r}
+comp_mixed <- cmdstan_model("mixedLevel.stan")
+```
+```{r}
+fit_mixed <- comp_mixed$sample(
+  data = standata_mixed,
+  # these are the defaults but specifying them anyway
+  # so you can see how to use them:
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000
+)
+```
+```{r}
+library(posterior)
+names <- names_from_WB(W, B)
+fit_mixed$summary(variables = c("coef_means"))
+```
+
+### Run using Rstan to accomodate with example
+```{r}
+post = rstan::stan(
+	file = 'mixedLevel.stan'
+	, data = standata_mixed
+	, seed = 1
+	, chains = 4
+	, cores = 4
+)
+```
+
+```{r}
+stan_summary(
+	post = post,
+	 pars = 'coef_means'
+	, W = W
+	, B = B
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,90 @@
+---
+title: "Neurofeedback Amygdala activation analysis"
+author: "Or Duek"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: yes
+---
+
+# Analysis of clinical data
+
+```{r, message=FALSE, results='hide'}
+# load libraries
+require(tidyverse)
+require(lme4)
+require(lmerTest)
+require(ggplot2)
+```
+```{r, message=FALSE, results='hide'}
+# load dataset
+clincal_df <- read_csv('CAPS_bcde_clusters_1019.csv')
+clincal_df$X14 <- NULL
+clincal_df$X8 <- NULL
+
+# make it long (create a function for easier use)
+names_long_reexp <- c('b_total_screening', 'b_total_30d', 'b_total_60d')
+names_long_hyper <- c('e_total_screening', 'e_total_30d','e_total_60d')
+names_long_total <- c('CAPS_total_screening', 'CAPS_total_30d', 'CAPS_total_60d')
+clincal_df_longTotal <- pivot_longer(select(clincal_df, "Subject ID","Neurofeedback Intervention", names_long_total), cols = names_long_total, names_to = 'time', values_to = 'score') %>% rename("subject" = "Subject ID", "group"="Neurofeedback Intervention")
+clincal_df_longTotal$time <- factor(clincal_df_longTotal$time, levels=c("CAPS_total_screening", "CAPS_total_30d", "CAPS_total_60d"))
+
+clincal_df_longReexp <- pivot_longer(select(clincal_df, "Subject ID","Neurofeedback Intervention", names_long_reexp), cols = names_long_reexp, names_to = 'time', values_to = 'score') %>% rename("subject" = "Subject ID", "group"="Neurofeedback Intervention") 
+clincal_df_longReexp$time <- factor(clincal_df_longReexp$time, levels = names_long_reexp)
+
+clincal_df_longHyper <- pivot_longer(select(clincal_df, "Subject ID","Neurofeedback Intervention", names_long_hyper), cols = names_long_hyper, names_to = 'time', values_to = 'score') %>% rename("subject" = "Subject ID", "group"="Neurofeedback Intervention")
+clincal_df_longHyper$time <- factor(clincal_df_longHyper$time, levels = names_long_hyper)
+```
+## Descriptives
+
+```{r}
+MASS::truehist(clincal_df$CAPS_total_screening)
+```
+
+# Mixed effect models
+
+
+## Plot the scores
+```{r}
+ggplot(clincal_df_longTotal, aes(x=time, y=score, color=group)) + geom_boxplot() + theme_minimal() + ggtitle("Total CAPS")
+ggplot(clincal_df_longReexp, aes(x=time, y=score, color=group)) + geom_boxplot() + theme_minimal() + ggtitle("Reexperiencing")
+ggplot(clincal_df_longHyper, aes(x=time, y=score, color=group)) + geom_boxplot() + theme_minimal() + ggtitle("HyperArousal")
+```
+
+## Run the models
+
+### Total Scores
+```{r}
+model1 <- lmer(score ~ time * group + (1|subject), data=clincal_df_longTotal)
+summary(model1)
+anova(model1)
+
+ggplot(clincal_df_longTotal, aes(x=group, y=score, color=time)) + geom_boxplot() + theme_minimal() + ggtitle("Total CAPS")
+```
+
+There is a significant difference between the timepoint (people improve), but no significant difference between the groups nor interaction. It is worth noticing that being in the Sham group adds 6 points to the total score, with all other predictors having negative influence on the score.
+
+### Reexperiencing
+
+```{r}
+model2 <- lmer(score ~ time * group + (1|subject), data=clincal_df_longReexp)
+summary(model2)
+anova(model2)
+ggplot(clincal_df_longReexp, aes(x=group, y=score, color=time)) + geom_boxplot() + theme_minimal() + ggtitle("Reexperiencing")
+```
+
+We can also see here, effect for time with no other thing. Here the differences between groups are even smaller.
+
+### Hyperarousal
+
+```{r}
+model3 <- lmer(score ~ time * group + (1|subject), data=clincal_df_longHyper)
+summary(model3)
+anova(model3)
+ggplot(clincal_df_longHyper, aes(x=group, y=score, color=time)) + geom_boxplot() + theme_minimal() + ggtitle("HyperArousal")
+```
+
+Same thing.
+
+
